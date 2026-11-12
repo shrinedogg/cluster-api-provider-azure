@@ -16,6 +16,31 @@ If this object is nil, no namespaces will be allowed (default behavior, if this 
 A namespace should be either in the NamespaceList or match with Selector to use the identity.
 Please note NamespaceList will take precedence over Selector if both are set.
 
+## Moving a shared identity with `clusterctl move`
+
+When several namespaces share one `AzureClusterIdentity` (for example through
+`allowedNamespaces`) and its `clientSecret` Secret, moving one of those clusters
+must not move the shared identity or the shared Secret: `clusterctl move` deletes
+a moved object from the source, and the clusters in the other namespaces would
+lose their credential. If the shared identity is labeled
+`clusterctl.cluster.x-k8s.io/move-hierarchy` (the CAPZ templates set this
+label), remove the label before the move and create the identity on the target
+instead:
+
+```bash
+kubectl label azureclusteridentity <identity-name> clusterctl.cluster.x-k8s.io/move-hierarchy-
+```
+
+Do the same for the `clientSecret` Secret: do not label it for move; create it on
+the target. After the move, confirm that the remaining clusters on the source
+still reconcile and that the moved cluster reports `Ready=True` on the target.
+
+For a dedicated (single-cluster) identity the opposite is true: label the
+identity and its Secret so both move with the cluster. See
+[Identities - Moving identities and credential Secrets with `clusterctl
+move`](identities.md#moving-identities-and-credential-secrets-with-clusterctl-move)
+for the decision table and the verification steps.
+
 ## Deprecated Identity Types
 
 <aside class="note warning">

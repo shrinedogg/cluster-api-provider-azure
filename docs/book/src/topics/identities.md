@@ -143,6 +143,104 @@ spec:
     - <cluster-namespace>
 ```
 
+## Moving identities and credential Secrets with `clusterctl move`
+
+When you move a cluster between management clusters with `clusterctl move`, the
+`AzureClusterIdentity` and the credential Secret it references are not guaranteed
+to follow the cluster. Handle each of them explicitly:
+
+### The `AzureClusterIdentity` object
+
+`clusterctl move` carries an object that is part of a move hierarchy or that is
+labeled for move. The `AzureClusterIdentity` objects in the CAPZ templates carry
+the `clusterctl.cluster.x-k8s.io/move-hierarchy: "true"` label, so they move with
+the cluster. An identity you created by hand does not carry the label and is not
+part of the move set: after the move the moved cluster still references it, but
+it does not exist on the target and CAPZ cannot reconcile the cluster. If you
+want a hand-created identity to move, label it the same way:
+
+```bash
+kubectl label azureclusteridentity <identity-name> \
+  clusterctl.cluster.x-k8s.io/move-hierarchy="true" --overwrite
+```
+
+### The `clientSecret` Secret
+
+For `ServicePrincipal`, `ServicePrincipalCertificate`, and `ManualServicePrincipal`
+identities, `AzureClusterIdentity.spec.clientSecret` points at a Kubernetes
+Secret that stores the service principal's password (or certificate and
+password). `clusterctl move` creates the Secret on the target and deletes it from
+the source only when the Secret is part of the move set. For a user-created
+Secret that means one of:
+
+- the Secret is owned by an object that moves with the cluster, or
+- the Secret name follows the `<cluster-name>-<purpose>` convention and the
+  Secret is in the same namespace as the cluster, or
+- the Secret carries the `clusterctl.cluster.x-k8s.io/move: "true"` label.
+
+Choose the approach by how the Secret is shared:
+
+| How the Secret is used | What to do before `clusterctl move` |
+|---|---|
+| Dedicated to this cluster's identity, in the cluster's namespace | Label it `clusterctl.cluster.x-k8s.io/move: "true"` (or name it `<cluster-name>-<purpose>`) so it moves with the cluster. The move deletes it from the source, which is safe because nothing else there uses it. |
+| Shared by several identities or clusters, or by other consumers on the source management cluster | Do **not** label it: a moved Secret is deleted from the source, and the remaining consumers lose their credential. Create the Secret on the target instead. |
+| `clientSecret.namespace` points at a namespace other than the cluster's namespace (and other than the provider namespace, `capz-system`) | `clusterctl move` does not discover Secrets in other namespaces, so a label does not help. Create the Secret on the target instead. |
+
+Example, a dedicated Secret in the cluster's namespace:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: example-cluster-identity-client-secret
+  namespace: default
+  labels:
+    clusterctl.cluster.x-k8s.io/move: "true"
+type: Opaque
+stringData:
+  clientSecret: <service-principal-client-secret>
+```
+
+Provisioning on the target (shared or cross-namespace cases):
+
+```bash
+# on the target management cluster, before or right after clusterctl move
+kubectl -n <clientSecret-namespace> create secret generic <clientSecret-name> \
+  --from-literal=clientSecret=<service-principal-client-secret>
+```
+
+`clusterctl move` deletes the moved objects from the source after creating them
+on the target, so do not label a Secret that anything on the source still needs.
+
+### Verify after the move
+
+On the target, the moved cluster reconciles only when both pieces are present:
+
+```bash
+kubectl -n <cluster-namespace> get azureclusteridentity <identity-name>
+kubectl -n <clientSecret-namespace> get secret <clientSecret-name>
+kubectl -n <cluster-namespace> get cluster <cluster-name>
+```
+
+A missing credential Secret blocks reconciliation: the CAPZ controller cannot
+build the per-cluster ASO credential Secret (error `failed to fetch
+AzureClusterIdentity secret`), and the cluster's ASO resources stay
+`Ready=False` (reason `Failed`) until the Secret exists. Wait for the `Cluster`
+to report `Ready=True` (and, for AKS, for the `AzureASOManaged*` resources to be
+`Ready=True`) before deleting anything on the source.
+
+On the source, when the Secret was shared, the remaining consumers keep working
+because the shared Secret was not labeled and therefore stays on the source.
+Confirm the other clusters that use the same identity still reconcile:
+
+```bash
+kubectl -n <other-namespace> get cluster <other-cluster-name>
+```
+
+For the ASO credential Secret named by the `serviceoperator.azure.com/credential-from`
+annotation on inline ASO resources, see
+[Azure Service Operator - Migrating a cluster with `clusterctl move`](aso.md#migrating-a-cluster-with-clusterctl-move).
+
 ## User-Assigned Managed Identity
 
 <aside class="note">

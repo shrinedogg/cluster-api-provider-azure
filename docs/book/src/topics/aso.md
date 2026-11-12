@@ -103,6 +103,11 @@ A few things to keep in mind:
   `clusterctl move` deletes a labeled Secret from the source, so do not label a Secret that user-managed ASO
   resources on the source still use.
 
+For the `clientSecret` Secret referenced by `AzureClusterIdentity` (the credential
+CAPZ itself uses, for self-managed clusters and the controller's ASO credential
+Secret), see
+[Identities - Moving identities and credential Secrets with `clusterctl move`](identities.md#moving-identities-and-credential-secrets-with-clusterctl-move).
+
 ## Configuration with Environment Variables
 
 These environment variables are passed through to the `aso-controller-settings` Secret to configure ASO when
